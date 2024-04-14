@@ -8,6 +8,8 @@
 #ifndef INC_FC_DATA_PROCESSING_H_
 #define INC_FC_DATA_PROCESSING_H_
 
+#include <time.h>
+
 #define LAUNCH_PITCH 	1.5708
 #define PAD_AIR_DENSITY	1.225
 #define PAD_AIR_TEMP	32.0
@@ -46,7 +48,7 @@ struct fc_processed_data {
 
 	float phi;
 	float theta;
-	int last_tick;
+	clock_t last_tick;
 };
 
 struct fc_unprocessed_data {
@@ -67,6 +69,7 @@ struct fc_unprocessed_data {
 
 	float air_pressure_mbar;
 	float air_temperature_C;
+	float baro_height;
 };
 
 float P[4] = {0.1,0.1,0.1,0.1};

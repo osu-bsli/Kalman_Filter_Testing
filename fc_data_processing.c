@@ -6,6 +6,9 @@
  */
 
 #include "fc_data_processing.h"
+#include <unistd.h>
+
+long Ticksps = sysconf(_SC_CLK_TCK);
 
 int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->velocity = 0.0;
@@ -25,34 +28,48 @@ int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->current_airbrake_angle = 0.0;
 	processed_data->current_drag = 0.298407;
 
-	processed_data->last_tick = osKernelGetTickCount();
+	processed_data->last_tick = clock();
 }
 
 int fc_process_sensor_data(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
-  // Read sensor data into a struct
-  fc_read_sensor_data(unprocessed_data);
-  fc_estimate_state(processed_data, unprocessed_data);
+  // TODO: open CSV files
+  
+
+  // Loop through CSV rows
+  while () {
+    // Read sensor data into a struct
+    fc_read_sensor_data(unprocessed_data);
+    // Process data
+    fc_estimate_state(processed_data, unprocessed_data);
+
+    // TODO: Write processed data to CSV output
+
+  }
+
+
+  // TODO: Close CSVs
+
   return 1;
 }
 
 int fc_read_sensor_data(struct fc_unprocessed_data *data) {
   
+
+  // TODO: CSV Stuff
+
+
+
+
 }
 
 int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
-  float baro_height;
-  // Convert barometer data to air density
-  processed_data->air_density = (unprocessed_data->air_pressure_mbar / 10.0)/(0.2869*(unprocessed_data->air_temperature_C + 273.1));
-  // Copy air temperature
-  processed_data->temperature = unprocessed_data->air_temperature_C;
-
   // Calculate altitude from barometer
-  baro_height = 44330*(1 - pow(unprocessed_data->air_pressure_mbar*100/101325, 1/5.255));
+  baro_height = unprocessed_data->baro_height;
 
   //~~~~~~~ Kalman filter to estimate pitch~~~~~~~~
   // Predict
-  int T = (osKernelGetTickCount() - processed_data->last_tick);
-  processed_data->last_tick = osKernelGetTickCount();
+  clock_t T = (clock() - processed_data->last_tick)/Ticksps;
+  processed_data->last_tick = clock();
   float p = unprocessed_data->bmi_gyro_x;
   float q = unprocessed_data->bmi_gyro_y;
   float r = unprocessed_data->bmi_gyro_z;
