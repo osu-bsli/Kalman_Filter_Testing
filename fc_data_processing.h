@@ -48,7 +48,7 @@ struct fc_processed_data {
 
 	float phi;
 	float theta;
-	clock_t last_tick;
+	float last_time;
 };
 
 struct fc_unprocessed_data {
@@ -70,6 +70,7 @@ struct fc_unprocessed_data {
 	float air_pressure_mbar;
 	float air_temperature_C;
 	float baro_height;
+	float current_time;
 };
 
 float P[4] = {0.1,0.1,0.1,0.1};

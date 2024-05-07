@@ -6,9 +6,46 @@
  */
 
 #include "fc_data_processing.h"
-#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
 
-long Ticksps = sysconf(_SC_CLK_TCK);
+FILE *CSV_in, *CSV_out;
+char *CSV_out_name = "data/flight_data_processed.csv", *CSV_in_name = "data/flight_data_2.csv";
+
+const char* getfield(char* line, int num) {
+    const char* tok;
+    for (tok = strtok(line, ",");
+            tok && *tok;
+            tok = strtok(NULL, ",\n"))
+    {
+        if (!--num)
+            return tok;
+    }
+    return NULL;
+}
+
+int main() {
+  // Create data structs
+  struct fc_unprocessed_data unprocessed_data; 
+  struct fc_processed_data processed_data;
+  // Initialize data
+  fc_init_data(&processed_data);
+
+  // TODO: open CSV files
+  CSV_in = fopen(CSV_in_name, "r+");
+  CSV_out = fopen(CSV_out_name, "w+");
+  fprintf(CSV_out, "time,velocity,vertical_velocity,altitude,air_density,pitch,temperature,phi,theta,baro_height\n");
+
+  // Call process_sensor_data
+  fc_process_sensor_data(&processed_data, &unprocessed_data);
+
+  // Close CSV files
+  fclose(CSV_in);
+  fclose(CSV_out);
+  return 1;
+}
 
 int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->velocity = 0.0;
@@ -18,6 +55,8 @@ int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->air_density = PAD_AIR_DENSITY;
 
 	processed_data->pitch = LAUNCH_PITCH;
+  processed_data->phi = LAUNCH_PITCH;
+  processed_data->theta = 0;
 	processed_data->acceleration = G;
 
 	processed_data->temperature = PAD_AIR_TEMP;
@@ -28,48 +67,86 @@ int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->current_airbrake_angle = 0.0;
 	processed_data->current_drag = 0.298407;
 
-	processed_data->last_tick = clock();
+	processed_data->last_time = 0.0;
+
+  EKF_init(0.0,0.0,0.0);
 }
 
 int fc_process_sensor_data(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
-  // TODO: open CSV files
-  
-
   // Loop through CSV rows
-  while () {
+  char line[1024];
+  fgets(line, 1024, CSV_in);
+
+  while (fgets(line, 1024, CSV_in)) {
+    //printf("%s\n\n\n", line);
     // Read sensor data into a struct
-    fc_read_sensor_data(unprocessed_data);
+    fc_read_sensor_data(unprocessed_data, line);
     // Process data
     fc_estimate_state(processed_data, unprocessed_data);
 
-    // TODO: Write processed data to CSV output
-
+    // Write processed data to CSV output
+    fprintf(CSV_out,"%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", unprocessed_data->current_time, processed_data->velocity, processed_data->velocity_vertical, processed_data->altitude, processed_data->air_density, processed_data->pitch, processed_data->temperature, processed_data->phi, processed_data->theta, unprocessed_data->baro_height);
   }
-
-
-  // TODO: Close CSVs
-
   return 1;
 }
 
-int fc_read_sensor_data(struct fc_unprocessed_data *data) {
+int fc_read_sensor_data(struct fc_unprocessed_data *data, char line[]) {
+  // Dupe string
+  char* tmp = strdup(line);
+
+  // Load data
+  data->accelerometer_x = atof(getfield(tmp, 2));
+  tmp = strdup(line);
+  data->accelerometer_y = atof(getfield(tmp, 3));
+  tmp = strdup(line);
+  data->accelerometer_z = atof(getfield(tmp, 4));
+  tmp = strdup(line);
+
+  data->magne_x = atof(getfield(tmp, 5));
+  tmp = strdup(line);
+  data->magne_y = atof(getfield(tmp, 6));
+  tmp = strdup(line);
+  data->magne_z = atof(getfield(tmp, 7));
+  tmp = strdup(line);
   
+  data->bmi_accel_x = atof(getfield(tmp, 11));
+  tmp = strdup(line);
+  data->bmi_accel_y = atof(getfield(tmp, 12));
+  tmp = strdup(line);
+  data->bmi_accel_z = atof(getfield(tmp, 13));
+  tmp = strdup(line);
+  data->bmi_gyro_x = atof(getfield(tmp, 8));
+  tmp = strdup(line);
+  data->bmi_gyro_y = atof(getfield(tmp, 9));
+  tmp = strdup(line);
+  data->bmi_gyro_z = atof(getfield(tmp, 10));
+  tmp = strdup(line);
+  data->magne_x = atof(getfield(tmp, 5));
+  tmp = strdup(line);
+  data->magne_y = atof(getfield(tmp, 6));
+  tmp = strdup(line);
+  data->magne_z = atof(getfield(tmp, 7));
+  tmp = strdup(line);
 
-  // TODO: CSV Stuff
+  data->baro_height = atof(getfield(tmp, 16))/3.281;
+  tmp = strdup(line);
+  data->current_time = atof(getfield(tmp, 1));
+  tmp = strdup(line);
 
 
 
-
+  // Free dupe
+  free(tmp);
 }
 
 int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
   // Calculate altitude from barometer
-  baro_height = unprocessed_data->baro_height;
+  float baro_height = unprocessed_data->baro_height;
 
   //~~~~~~~ Kalman filter to estimate pitch~~~~~~~~
   // Predict
-  clock_t T = (clock() - processed_data->last_tick)/Ticksps;
-  processed_data->last_tick = clock();
+  float T = (unprocessed_data->current_time - processed_data->last_time);
+  processed_data->last_time = unprocessed_data->current_time;
   float p = unprocessed_data->bmi_gyro_x;
   float q = unprocessed_data->bmi_gyro_y;
   float r = unprocessed_data->bmi_gyro_z;
@@ -93,10 +170,10 @@ int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unproc
   P[1] = P[1] + Ptmp[1];
   P[2] = P[2] + Ptmp[2];
   P[3] = P[3] + Ptmp[3];
-
+ 
   // Update
-  float ax = unprocessed_data->accelerometer_x;
-  float ay = unprocessed_data->accelerometer_y;
+  float ax = unprocessed_data->accelerometer_y;
+  float ay = unprocessed_data->accelerometer_x;
   float az = unprocessed_data->accelerometer_z;
 
   float h[3] = { G*st, -G*ct*sp, -G*ct*cp};
@@ -144,7 +221,12 @@ int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unproc
   processed_data->theta = processed_data->theta + K[3]*(ax - h[0]) + K[4]*(ay - h[1]) + K[5]*(ax - h[2]);
   processed_data->pitch = processed_data->theta;
 
-  // Calculate acceleration from accelerometer
+
+
+  //Calculate acceleration from accelerometer
+  float ax = unprocessed_data->accelerometer_x;
+  float ay = unprocessed_data->accelerometer_y;
+  float ay = unprocessed_data->accelerometer_z;
   processed_data->acceleration = sqrt(ax*ax + ay*ay + az*az);
 
   /**
@@ -165,7 +247,7 @@ int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unproc
   float Q21 = var_acc*0.5*(T*T*T);
   float Q22 = var_acc*(T*T);
 
-  float R11 = 0.008; // TODO: Adjust
+  float R11 = 0.008; // TODO: Adjust originally 0.008
 
   float ps1,ps2,opt;
   float pp11,pp12,pp21,pp22;
@@ -199,7 +281,6 @@ int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unproc
 
   // Calculate velocity
   processed_data->velocity = processed_data->velocity_vertical/sin(processed_data->pitch);
+
   return 1;
 }
-
-
