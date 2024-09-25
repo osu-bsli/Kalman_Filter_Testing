@@ -9,8 +9,9 @@
 #define INC_FC_DATA_PROCESSING_H_
 
 #include <time.h>
+#include "EKF.c"
 
-#define LAUNCH_PITCH 	1.5708
+#define LAUNCH_PITCH 	1.5
 #define PAD_AIR_DENSITY	1.225
 #define PAD_AIR_TEMP	32.0
 #define G				9.81
@@ -31,8 +32,10 @@ struct fc_processed_data {
 	// Sensor State
 	float velocity;
 	float velocity_vertical;
+	float velocity_vertical_2;
 
 	float altitude;
+	float altitude_2;
 	float air_density;
 
 	float pitch; // radians
@@ -78,10 +81,11 @@ float Q[4] = {0.001,0.001,0.001,0.001};
 float R[4] = {0.011,0.011,0.011,0.011};
 
 /* Functions */
+int fc_init_data(struct fc_processed_data *processed_data);
 int fc_init_data_processing(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data);
-int fc_process_sensor_data(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data);
-int fc_read_sensor_data(struct fc_unprocessed_data *data);
-int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unporcessed_data);
+int fc_process_sensor_data(EKF *filter, struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data);
+int fc_read_sensor_data(struct fc_unprocessed_data *data, char line[]);
+int fc_estimate_state(EKF *filter, struct fc_processed_data *processed_data, struct fc_unprocessed_data *unporcessed_data);
 
 
 

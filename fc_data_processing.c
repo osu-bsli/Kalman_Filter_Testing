@@ -30,16 +30,20 @@ int main() {
   // Create data structs
   struct fc_unprocessed_data unprocessed_data; 
   struct fc_processed_data processed_data;
+  EKF filter;
+  float P[2] = {0.1,0.1}, Q[2] = {0.001,0.001}, R[3] = {0.011,0.011,0.011};
+
   // Initialize data
   fc_init_data(&processed_data);
+  EKF_Init(&filter, P, Q, R, 0.0f, LAUNCH_PITCH);
 
   // TODO: open CSV files
   CSV_in = fopen(CSV_in_name, "r+");
   CSV_out = fopen(CSV_out_name, "w+");
-  fprintf(CSV_out, "time,velocity,vertical_velocity,altitude,air_density,pitch,temperature,phi,theta,baro_height\n");
+  fprintf(CSV_out, "time,velocity,vertical_velocity,altitude,vertical_velocity_2,altitude_2,air_density,pitch,temperature,phi,theta,baro_height\n");
 
   // Call process_sensor_data
-  fc_process_sensor_data(&processed_data, &unprocessed_data);
+  fc_process_sensor_data(&filter, &processed_data, &unprocessed_data);
 
   // Close CSV files
   fclose(CSV_in);
@@ -52,11 +56,15 @@ int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->velocity_vertical = 0.0;
 
 	processed_data->altitude = 0.0;
+
+  processed_data->velocity_vertical_2 = 0.0;
+
+	processed_data->altitude_2 = 0.0;
 	processed_data->air_density = PAD_AIR_DENSITY;
 
 	processed_data->pitch = LAUNCH_PITCH;
-  processed_data->phi = LAUNCH_PITCH;
-  processed_data->theta = 0;
+  processed_data->phi = 0.0f;
+  processed_data->theta = LAUNCH_PITCH;
 	processed_data->acceleration = G;
 
 	processed_data->temperature = PAD_AIR_TEMP;
@@ -68,11 +76,10 @@ int fc_init_data(struct fc_processed_data *processed_data) {
 	processed_data->current_drag = 0.298407;
 
 	processed_data->last_time = 0.0;
-
-  EKF_init(0.0,0.0,0.0);
 }
 
-int fc_process_sensor_data(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
+int fc_process_sensor_data(EKF *filter, struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
+  printf("Processing . . . ");
   // Loop through CSV rows
   char line[1024];
   fgets(line, 1024, CSV_in);
@@ -82,11 +89,12 @@ int fc_process_sensor_data(struct fc_processed_data *processed_data, struct fc_u
     // Read sensor data into a struct
     fc_read_sensor_data(unprocessed_data, line);
     // Process data
-    fc_estimate_state(processed_data, unprocessed_data);
+    fc_estimate_state(filter, processed_data, unprocessed_data);
 
     // Write processed data to CSV output
-    fprintf(CSV_out,"%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", unprocessed_data->current_time, processed_data->velocity, processed_data->velocity_vertical, processed_data->altitude, processed_data->air_density, processed_data->pitch, processed_data->temperature, processed_data->phi, processed_data->theta, unprocessed_data->baro_height);
+    fprintf(CSV_out,"%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", unprocessed_data->current_time, processed_data->velocity, processed_data->velocity_vertical, processed_data->altitude, processed_data->velocity_vertical_2, processed_data->altitude_2, processed_data->air_density, processed_data->pitch, processed_data->temperature, processed_data->phi, processed_data->theta, unprocessed_data->baro_height);
   }
+  printf("Complete.\n");
   return 1;
 }
 
@@ -109,17 +117,17 @@ int fc_read_sensor_data(struct fc_unprocessed_data *data, char line[]) {
   data->magne_z = atof(getfield(tmp, 7));
   tmp = strdup(line);
   
-  data->bmi_accel_x = atof(getfield(tmp, 11));
+  data->bmi_accel_z = atof(getfield(tmp, 11));//x
   tmp = strdup(line);
-  data->bmi_accel_y = atof(getfield(tmp, 12));
+  data->bmi_accel_x = -1*atof(getfield(tmp, 12));//y
   tmp = strdup(line);
-  data->bmi_accel_z = atof(getfield(tmp, 13));
+  data->bmi_accel_y = -1*atof(getfield(tmp, 13));//z
   tmp = strdup(line);
-  data->bmi_gyro_x = atof(getfield(tmp, 8));
+  data->bmi_gyro_z = atof(getfield(tmp, 8));//x
   tmp = strdup(line);
-  data->bmi_gyro_y = atof(getfield(tmp, 9));
+  data->bmi_gyro_x = -1*atof(getfield(tmp, 9));//y
   tmp = strdup(line);
-  data->bmi_gyro_z = atof(getfield(tmp, 10));
+  data->bmi_gyro_y = -1*atof(getfield(tmp, 10));//z
   tmp = strdup(line);
   data->magne_x = atof(getfield(tmp, 5));
   tmp = strdup(line);
@@ -139,94 +147,88 @@ int fc_read_sensor_data(struct fc_unprocessed_data *data, char line[]) {
   free(tmp);
 }
 
-int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
+int fc_estimate_state(EKF *filter, struct fc_processed_data *processed_data, struct fc_unprocessed_data *unprocessed_data) {
   // Calculate altitude from barometer
   float baro_height = unprocessed_data->baro_height;
 
-  //~~~~~~~ Kalman filter to estimate pitch~~~~~~~~
-  // Predict
+  // //~~~~~~~ Kalman filter to estimate pitch~~~~~~~~
+  // // Predict
   float T = (unprocessed_data->current_time - processed_data->last_time);
   processed_data->last_time = unprocessed_data->current_time;
-  float p = unprocessed_data->bmi_gyro_x;
-  float q = unprocessed_data->bmi_gyro_y;
-  float r = unprocessed_data->bmi_gyro_z;
+  // float p = unprocessed_data->bmi_gyro_x;
+  // float q = unprocessed_data->bmi_gyro_y;
+  // float r = unprocessed_data->bmi_gyro_z;
+  // float sp = sin(processed_data->phi);
+  // float cp = cos(processed_data->phi);
+  // float tt = tan(processed_data->theta);
+  // processed_data->phi = processed_data->phi + T*(p + tt*(q*sp + r*cp));
+  // processed_data->theta = processed_data->theta + T*(q*cp - r*sp);
+  // sp = sin(processed_data->phi);
+  // cp = cos(processed_data->phi);
+  // float st = sin(processed_data->theta);
+  // float ct = cos(processed_data->theta);
+  // float A[4] = {tt*(q*cp - r*sp), (r*cp + q*sp)*(tt*tt + 1.0), -(r*cp + q*sp), 0.0};
+  // float Ptmp[4] = {T*(Q[0] + 2.0*A[0]*P[0] + A[1]*P[2]), T*(A[0]*P[1] + A[2]*P[0] + A[1]*P[3] + A[3]*P[1]), T*(A[0]*P[2] + A[2]*P[0] + A[1]*P[3] + A[3]*P[2]), T*(Q[1] + A[2]*P[2] + 2.0*A[3]*P[3])};
+  // P[0] = P[0] + Ptmp[0];
+  // P[1] = P[1] + Ptmp[1];
+  // P[2] = P[2] + Ptmp[2];
+  // P[3] = P[3] + Ptmp[3];
+  // // Update
+  // float ax = unprocessed_data->accelerometer_y;
+  // float ay = unprocessed_data->accelerometer_x;
+  // float az = unprocessed_data->accelerometer_z;
+  // float h[3] = { G*st, -G*ct*sp, -G*ct*cp};
+  // float C[6] = {0.0, G*ct, -G*ct, G*sp*st, G*sp*ct, G*cp*st};
+  // float tempInv[9];
+  // tempInv[0] = P[3]*C[1]*C[1] + R[0];
+  // tempInv[1] = C[1]*C[2]*P[2] + C[1]*C[3]*P[3];
+  // tempInv[2] = C[1]*C[4]*P[2] + C[1]*C[5]*P[3];
+  // tempInv[3] = C[1]*(C[2]*P[1] + C[3]*P[3]);
+  // tempInv[4] = R[1] + C[2]*(C[2]*P[0] + C[3]*P[2]) + C[3]*(C[2]*P[1]+C[3]*P[3]);
+  // tempInv[5] = C[4]*(C[2]*P[0] + C[3]*P[2]) + C[5]*(C[2]*P[1] + C[3]*P[3]);
+  // tempInv[6] = C[1]*(C[4]*P[1] + C[5]*P[3]);
+  // tempInv[7] = C[2]*(C[4]*P[0]) + C[5]*(C[4]*P[1] + C[5]*P[3]);
+  // tempInv[8] = R[2] + C[4]*(C[4]*P[0] + C[5]*P[2])+ C[5]*(C[4]*P[1] + C[5]*P[3]);
+  // float tempInvdetinv = 1.0/(tempInv[0]*tempInv[4]*tempInv[8] - tempInv[0]*tempInv[5]*tempInv[7] - tempInv[1]*tempInv[3]*tempInv[8] + tempInv[1]*tempInv[5]*tempInv[6] + tempInv[2]*tempInv[3]*tempInv[7] - tempInv[2]*tempInv[4]*tempInv[6]);
+  // float tempInvinv[9];
+  // tempInvinv[0] = tempInvdetinv*(tempInv[4]*tempInv[8] - tempInv[5]*tempInv[7]);
+  // tempInvinv[1] = -tempInvdetinv*(tempInv[1]*tempInv[8] - tempInv[2]*tempInv[7]);
+  // tempInvinv[2] = tempInvdetinv*(tempInv[1]*tempInv[5] - tempInv[2]*tempInv[4]);
+  // tempInvinv[3] = -tempInvdetinv*(tempInv[3]*tempInv[8] - tempInv[5]*tempInv[6]);
+  // tempInvinv[4] = tempInvdetinv*(tempInv[0]*tempInv[8] - tempInv[2]*tempInv[6]);
+  // tempInvinv[5] = -tempInvdetinv*(tempInv[0]*tempInv[5] - tempInv[2]*tempInv[3]);
+  // tempInvinv[6] = tempInvdetinv*(tempInv[3]*tempInv[7] - tempInv[4]*tempInv[6]);
+  // tempInvinv[7] = -tempInvdetinv*(tempInv[0]*tempInv[7] - tempInv[1]*tempInv[6]);
+  // tempInvinv[8] = tempInvdetinv*(tempInv[0]*tempInv[4] - tempInv[1]*tempInv[3]);
+  // float K[6] = {tempInvinv[3]*(C[2]*P[0] + C[3]*P[1]) + tempInvinv[6]*(C[4]*P[0] + C[5]*P[1]) + C[1]*tempInvinv[0]*P[1], tempInvinv[4]*(C[2]*P[0] + C[3]*P[1]) + tempInvinv[7]*(C[4]*P[0] + C[5]*P[1]) + C[1]*tempInvinv[1]*P[1], tempInvinv[5]*(C[2]*P[0] + C[3]*P[1]) + tempInvinv[8]*(C[4]*P[0] + C[5]*P[1]) + C[1]*tempInvinv[2]*P[1],
+  // 	  	  	  	tempInvinv[3]*(C[2]*P[2] + C[3]*P[3]) + tempInvinv[6]*(C[4]*P[2] + C[5]*P[3]) + C[1]*tempInvinv[0]*P[3], tempInvinv[4]*(C[2]*P[2] + C[3]*P[3]) + tempInvinv[7]*(C[4]*P[2] + C[5]*P[3]) + C[1]*tempInvinv[1]*P[3], tempInvinv[5]*(C[2]*P[2] + C[3]*P[3]) + tempInvinv[8]*(C[4]*P[2] + C[5]*P[3]) + C[1]*tempInvinv[2]*P[3]};
+  // Ptmp[0] = -P[2]*(C[1]*K[0] + C[3]*K[1] + C[5]*K[2]) - P[0]*(C[2]*K[1] + C[4]*K[2] - 1.0);
+  // Ptmp[1] = -P[3]*(C[1]*K[0] + C[3]*K[1] + C[5]*K[2]) - P[1]*(C[2]*K[1] + C[4]*K[2]) - P[1]*(C[2]*K[1] + C[4]*K[2] - 1.0);
+  // Ptmp[2] = -P[2]*(C[1]*K[3] + C[3]*K[4] + C[5]*K[5] - 1.0) - P[0]*(C[2]*K[4] + C[4]*K[5]);
+  // Ptmp[3] = -P[3]*(C[1]*K[3] + C[3]*K[4] + C[5]*K[5]) - P[1]*(C[2]*K[4] + C[4]*K[5] - 1.0) - P[1]*(C[2]*K[4] + C[4]*K[5]);
+  // P[0] = P[0] + Ptmp[0];
+  // P[1] = P[1] + Ptmp[1];
+  // P[2] = P[2] + Ptmp[2];
+  // P[3] = P[3] + Ptmp[3];
+  // processed_data->phi = processed_data->phi + K[0]*(ax - h[0]) + K[1]*(ay - h[1]) + K[2]*(ax - h[2]);
+  // processed_data->theta = processed_data->theta + K[3]*(ax - h[0]) + K[4]*(ay - h[1]) + K[5]*(ax - h[2]);
+  // processed_data->pitch = processed_data->theta;
 
-  float sp = sin(processed_data->phi);
-  float cp = cos(processed_data->phi);
-  float tt = tan(processed_data->theta);
-
-  processed_data->phi = processed_data->phi + T*(p + tt*(q*sp + r*cp));
-  processed_data->theta = processed_data->theta + T*(q*cp - r*sp);
-
-  sp = sin(processed_data->phi);
-  cp = cos(processed_data->phi);
-  float st = sin(processed_data->theta);
-  float ct = cos(processed_data->theta);
-
-  float A[4] = {tt*(q*cp - r*sp), (r*cp + q*sp)*(tt*tt + 1.0), -(r*cp + q*sp), 0.0};
-  float Ptmp[4] = {T*(Q[0] + 2.0*A[0]*P[0] + A[1]*P[2]), T*(A[0]*P[1] + A[2]*P[0] + A[1]*P[3] + A[3]*P[1]), T*(A[0]*P[2] + A[2]*P[0] + A[1]*P[3] + A[3]*P[2]), T*(Q[1] + A[2]*P[2] + 2.0*A[3]*P[3])};
-
-  P[0] = P[0] + Ptmp[0];
-  P[1] = P[1] + Ptmp[1];
-  P[2] = P[2] + Ptmp[2];
-  P[3] = P[3] + Ptmp[3];
- 
+  /*~~~ Phil's Pitch Kalman Filter ~~~*/
+  // Predict
+  EKF_Predict(filter, unprocessed_data->bmi_gyro_x, unprocessed_data->bmi_gyro_y, unprocessed_data->bmi_gyro_z, T);
   // Update
-  float ax = unprocessed_data->accelerometer_y;
-  float ay = unprocessed_data->accelerometer_x;
-  float az = unprocessed_data->accelerometer_z;
-
-  float h[3] = { G*st, -G*ct*sp, -G*ct*cp};
-  float C[6] = {0.0, G*ct, -G*ct, G*sp*st, G*sp*ct, G*cp*st};
-  float tempInv[9];
-
-  tempInv[0] = P[3]*C[1]*C[1] + R[0];
-  tempInv[1] = C[1]*C[2]*P[2] + C[1]*C[3]*P[3];
-  tempInv[2] = C[1]*C[4]*P[2] + C[1]*C[5]*P[3];
-  tempInv[3] = C[1]*(C[2]*P[1] + C[3]*P[3]);
-  tempInv[4] = R[1] + C[2]*(C[2]*P[0] + C[3]*P[2]) + C[3]*(C[2]*P[1]+C[3]*P[3]);
-  tempInv[5] = C[4]*(C[2]*P[0] + C[3]*P[2]) + C[5]*(C[2]*P[1] + C[3]*P[3]);
-  tempInv[6] = C[1]*(C[4]*P[1] + C[5]*P[3]);
-  tempInv[7] = C[2]*(C[4]*P[0]) + C[5]*(C[4]*P[1] + C[5]*P[3]);
-  tempInv[8] = R[2] + C[4]*(C[4]*P[0] + C[5]*P[2])+ C[5]*(C[4]*P[1] + C[5]*P[3]);
-
-  float tempInvdetinv = 1.0/(tempInv[0]*tempInv[4]*tempInv[8] - tempInv[0]*tempInv[5]*tempInv[7] - tempInv[1]*tempInv[3]*tempInv[8] + tempInv[1]*tempInv[5]*tempInv[6] + tempInv[2]*tempInv[3]*tempInv[7] - tempInv[2]*tempInv[4]*tempInv[6]);
-  float tempInvinv[9];
-
-  tempInvinv[0] = tempInvdetinv*(tempInv[4]*tempInv[8] - tempInv[5]*tempInv[7]);
-  tempInvinv[1] = -tempInvdetinv*(tempInv[1]*tempInv[8] - tempInv[2]*tempInv[7]);
-  tempInvinv[2] = tempInvdetinv*(tempInv[1]*tempInv[5] - tempInv[2]*tempInv[4]);
-  tempInvinv[3] = -tempInvdetinv*(tempInv[3]*tempInv[8] - tempInv[5]*tempInv[6]);
-  tempInvinv[4] = tempInvdetinv*(tempInv[0]*tempInv[8] - tempInv[2]*tempInv[6]);
-  tempInvinv[5] = -tempInvdetinv*(tempInv[0]*tempInv[5] - tempInv[2]*tempInv[3]);
-  tempInvinv[6] = tempInvdetinv*(tempInv[3]*tempInv[7] - tempInv[4]*tempInv[6]);
-  tempInvinv[7] = -tempInvdetinv*(tempInv[0]*tempInv[7] - tempInv[1]*tempInv[6]);
-  tempInvinv[8] = tempInvdetinv*(tempInv[0]*tempInv[4] - tempInv[1]*tempInv[3]);
-
-
-  float K[6] = {tempInvinv[3]*(C[2]*P[0] + C[3]*P[1]) + tempInvinv[6]*(C[4]*P[0] + C[5]*P[1]) + C[1]*tempInvinv[0]*P[1], tempInvinv[4]*(C[2]*P[0] + C[3]*P[1]) + tempInvinv[7]*(C[4]*P[0] + C[5]*P[1]) + C[1]*tempInvinv[1]*P[1], tempInvinv[5]*(C[2]*P[0] + C[3]*P[1]) + tempInvinv[8]*(C[4]*P[0] + C[5]*P[1]) + C[1]*tempInvinv[2]*P[1],
-  	  	  	  	tempInvinv[3]*(C[2]*P[2] + C[3]*P[3]) + tempInvinv[6]*(C[4]*P[2] + C[5]*P[3]) + C[1]*tempInvinv[0]*P[3], tempInvinv[4]*(C[2]*P[2] + C[3]*P[3]) + tempInvinv[7]*(C[4]*P[2] + C[5]*P[3]) + C[1]*tempInvinv[1]*P[3], tempInvinv[5]*(C[2]*P[2] + C[3]*P[3]) + tempInvinv[8]*(C[4]*P[2] + C[5]*P[3]) + C[1]*tempInvinv[2]*P[3]};
-
-  Ptmp[0] = -P[2]*(C[1]*K[0] + C[3]*K[1] + C[5]*K[2]) - P[0]*(C[2]*K[1] + C[4]*K[2] - 1.0);
-  Ptmp[1] = -P[3]*(C[1]*K[0] + C[3]*K[1] + C[5]*K[2]) - P[1]*(C[2]*K[1] + C[4]*K[2]) - P[1]*(C[2]*K[1] + C[4]*K[2] - 1.0);
-  Ptmp[2] = -P[2]*(C[1]*K[3] + C[3]*K[4] + C[5]*K[5] - 1.0) - P[0]*(C[2]*K[4] + C[4]*K[5]);
-  Ptmp[3] = -P[3]*(C[1]*K[3] + C[3]*K[4] + C[5]*K[5]) - P[1]*(C[2]*K[4] + C[4]*K[5] - 1.0) - P[1]*(C[2]*K[4] + C[4]*K[5]);
-
-  P[0] = P[0] + Ptmp[0];
-  P[1] = P[1] + Ptmp[1];
-  P[2] = P[2] + Ptmp[2];
-  P[3] = P[3] + Ptmp[3];
-
-  processed_data->phi = processed_data->phi + K[0]*(ax - h[0]) + K[1]*(ay - h[1]) + K[2]*(ax - h[2]);
-  processed_data->theta = processed_data->theta + K[3]*(ax - h[0]) + K[4]*(ay - h[1]) + K[5]*(ax - h[2]);
-  processed_data->pitch = processed_data->theta;
-
-
-
+  EKF_Update(filter, unprocessed_data->bmi_accel_x, unprocessed_data->bmi_accel_y, unprocessed_data->bmi_accel_z);
+  processed_data->phi = filter->phi_r;
+  processed_data->pitch = filter->theta_r;
+  processed_data->theta = filter->theta_r;
+  if (unprocessed_data->current_time < 10.1 && unprocessed_data->current_time > 9.9) {
+    printf("  %f,%f,%f,%f   %f,%f   %f,%f,%f   ", filter->P[0][0], filter->P[0][1], filter->P[1][0], filter->P[1][1], filter->Q[0], filter->Q[1], filter->R[0], filter->R[1], filter->R[2]);
+  }
   //Calculate acceleration from accelerometer
   float ax = unprocessed_data->accelerometer_x;
   float ay = unprocessed_data->accelerometer_y;
-  float ay = unprocessed_data->accelerometer_z;
+  float az = unprocessed_data->accelerometer_z;
   processed_data->acceleration = sqrt(ax*ax + ay*ay + az*az);
 
   /**
@@ -235,7 +237,7 @@ int fc_estimate_state(struct fc_processed_data *processed_data, struct fc_unproc
   processed_data->altitude = next_alt;
   */
 
-  // Kalman filter to estimate vertical velocity and altitude
+  /*~~~ Kalman filter to estimate vertical velocity and altitude ~~~*/
   float m11 = 1;
   float m21 = 0;
   float m12 = 0;
